@@ -160,7 +160,7 @@ run_steamcmd() {
     -v "$deploydir/steam":/root/Steam \
     -w "$deploydir" \
     "$STEAMCMD_IMAGE" \
-    bash -c "steamcmd $*"
+    bash -c "/home/steam/steamcmd/steamcmd.sh $*"
 }
 
 echo ""
