@@ -2,7 +2,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-STEAMCMD_IMAGE="${STEAMCMD_IMAGE:-cm2network/steamcmd:root}"
+STEAMCMD_IMAGE="${STEAMCMD_IMAGE:-sonroyaalmerol/steamcmd-arm64:root}"
 
 # Wait for Docker daemon (DinD sidecar may still be starting)
 if [ -n "${DOCKER_HOST:-}" ]; then
@@ -150,17 +150,25 @@ else
   echo ""
 fi
 
-# Run steamcmd via Docker (x86 image, works on arm64 via QEMU binfmt).
+# Run steamcmd via Docker using Box86 for x86 emulation (native ARM64).
+# Box86 is called directly to avoid binfmt_misc dependency.
 # All files are under $contentroot which is a shared hostPath volume,
 # so both the runner and DinD-spawned containers can access them.
 run_steamcmd() {
   docker run --rm \
-    --platform linux/amd64 \
     -v "$contentroot":"$contentroot" \
     -v "$deploydir/steam":/root/Steam \
     -w "$deploydir" \
     "$STEAMCMD_IMAGE" \
-    bash -c "/home/steam/steamcmd/steamcmd.sh $*"
+    bash -c '
+      export LD_LIBRARY_PATH="/home/steam/steamcmd/linux32:${LD_LIBRARY_PATH:-}"
+      while true; do
+        box86 /home/steam/steamcmd/linux32/steamcmd '"$*"'
+        ret=$?
+        if [ $ret -ne 42 ]; then exit $ret; fi
+        echo "steamcmd: restarting by request..."
+      done
+    '
 }
 
 echo ""
