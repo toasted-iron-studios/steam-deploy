@@ -4,18 +4,18 @@ IFS=$'\n\t'
 
 STEAMCMD_IMAGE="${STEAMCMD_IMAGE:-cm2network/steamcmd:root}"
 
-steamdir="$HOME/Steam"
-workdir=$(pwd)
-
 # Handle absolute or relative rootPath
 if [[ "$rootPath" = /* ]]; then
   contentroot="$rootPath"
 else
-  contentroot="$workdir/$rootPath"
+  contentroot="$(pwd)/$rootPath"
 fi
 
-mkdir -p BuildOutput
-manifest_path="$workdir/manifest.vdf"
+# Use a deploy workspace under the content root (shared volume accessible by DinD)
+deploydir="$contentroot/.deploy"
+mkdir -p "$deploydir/BuildOutput"
+mkdir -p "$deploydir/steam/config"
+manifest_path="$deploydir/manifest.vdf"
 
 echo ""
 echo "#################################"
@@ -56,7 +56,7 @@ until [ $i -gt 9 ]; do
     echo ""
     export DEPOTS="$DEPOTS  \"$currentDepot\" \"depot${currentDepot}.vdf\"\n  "
 
-    cat << EOF > "depot${currentDepot}.vdf"
+    cat << EOF > "$deploydir/depot${currentDepot}.vdf"
 "DepotBuildConfig"
 {
   "DepotID" "$currentDepot"
@@ -73,7 +73,7 @@ until [ $i -gt 9 ]; do
 }
 EOF
 
-  cat depot${currentDepot}.vdf
+  cat "$deploydir/depot${currentDepot}.vdf"
   echo ""
   fi;
 
@@ -86,12 +86,12 @@ echo "#    Generating App Manifest    #"
 echo "#################################"
 echo ""
 
-cat << EOF > "manifest.vdf"
+cat << EOF > "$manifest_path"
 "appbuild"
 {
   "appid" "$appId"
   "desc" "$buildDescription"
-  "buildoutput" "BuildOutput"
+  "buildoutput" "$deploydir/BuildOutput"
   "contentroot" "$contentroot"
   "setlive" "$releaseBranch"
 
@@ -101,7 +101,7 @@ cat << EOF > "manifest.vdf"
 }
 EOF
 
-cat manifest.vdf
+cat "$manifest_path"
 echo ""
 
 if [ -n "$steam_totp" ]; then
@@ -124,27 +124,25 @@ else
   echo "#################################"
   echo ""
 
-  echo "Steam is installed in: $steamdir"
+  echo "Steam config at: $deploydir/steam"
 
-  mkdir -p "$steamdir/config"
-
-  echo "Copying $steamdir/config/config.vdf..."
-  echo "$configVdf" | base64 -d > "$steamdir/config/config.vdf"
-  chmod 777 "$steamdir/config/config.vdf"
+  echo "Copying config.vdf..."
+  echo "$configVdf" | base64 -d > "$deploydir/steam/config/config.vdf"
+  chmod 777 "$deploydir/steam/config/config.vdf"
 
   echo "Finished Copying SteamGuard Files!"
   echo ""
 fi
 
-# Run steamcmd via Docker (x86 image, works on arm64 via QEMU binfmt)
-# Mounts: workspace (VDFs), content root (build artifacts), Steam config
+# Run steamcmd via Docker (x86 image, works on arm64 via QEMU binfmt).
+# All files are under $contentroot which is a shared hostPath volume,
+# so both the runner and DinD-spawned containers can access them.
 run_steamcmd() {
   docker run --rm \
     --platform linux/amd64 \
-    -v "$workdir":/workspace \
-    -v "$contentroot":"$contentroot":ro \
-    -v "$steamdir":/root/Steam \
-    -w /workspace \
+    -v "$contentroot":"$contentroot" \
+    -v "$deploydir/steam":/root/Steam \
+    -w "$deploydir" \
     "$STEAMCMD_IMAGE" \
     bash -c "steamcmd $*"
 }
@@ -181,7 +179,7 @@ echo "#        Uploading build        #"
 echo "#################################"
 echo ""
 
-run_steamcmd "+login $steam_username +run_app_build /workspace/manifest.vdf +quit" || (
+run_steamcmd "+login $steam_username +run_app_build $manifest_path +quit" || (
     echo ""
     echo "#################################"
     echo "#             Errors            #"
@@ -189,15 +187,15 @@ run_steamcmd "+login $steam_username +run_app_build /workspace/manifest.vdf +qui
     echo ""
     echo "Listing current folder and rootpath"
     echo ""
-    ls -alh
+    ls -alh "$deploydir"
     echo ""
-    ls -alh "$rootPath" || true
+    ls -alh "$contentroot" || true
     echo ""
     echo "Listing logs folder:"
     echo ""
-    ls -Ralph "$steamdir/logs/" || true
+    ls -Ralph "$deploydir/steam/logs/" || true
 
-    for f in "$steamdir"/logs/*; do
+    for f in "$deploydir"/steam/logs/*; do
       if [ -e "$f" ]; then
         echo "######## $f"
         cat "$f"
@@ -206,27 +204,24 @@ run_steamcmd "+login $steam_username +run_app_build /workspace/manifest.vdf +qui
     done
 
     echo ""
-    echo "Displaying error log"
-    echo ""
-    cat "$steamdir/logs/stderr.txt" || true
-    echo ""
-    echo "Displaying bootstrapper log"
-    echo ""
-    cat "$steamdir/logs/bootstrap_log.txt" || true
-    echo ""
     echo "#################################"
     echo "#             Output            #"
     echo "#################################"
     echo ""
-    ls -Ralph BuildOutput
+    ls -Ralph "$deploydir/BuildOutput" || true
 
-    for f in BuildOutput/*.log; do
-      echo "######## $f"
-      cat "$f"
-      echo
+    for f in "$deploydir"/BuildOutput/*.log; do
+      if [ -e "$f" ]; then
+        echo "######## $f"
+        cat "$f"
+        echo
+      fi
     done
 
     exit 1
   )
 
 echo "manifest=${manifest_path}" >> $GITHUB_OUTPUT
+
+# Clean up deploy workspace
+rm -rf "$deploydir"
