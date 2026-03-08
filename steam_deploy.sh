@@ -2,22 +2,20 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-if ! command -v steamcmd &>/dev/null; then
-  echo "Error: steamcmd not found. Ensure it is installed on the runner."
-  exit 1
-fi
+STEAMCMD_IMAGE="${STEAMCMD_IMAGE:-cm2network/steamcmd:root}"
 
-steamdir=${STEAM_HOME:-$HOME/Steam}
-# this is relative to the action, unless an absolute path is given
+steamdir="$HOME/Steam"
+workdir=$(pwd)
+
+# Handle absolute or relative rootPath
 if [[ "$rootPath" = /* ]]; then
   contentroot="$rootPath"
 else
-  contentroot="$(pwd)/$rootPath"
+  contentroot="$workdir/$rootPath"
 fi
 
-# these are temporary file we create, so in a tmpdir
-mkdir BuildOutput
-manifest_path=$(pwd)/manifest.vdf
+mkdir -p BuildOutput
+manifest_path="$workdir/manifest.vdf"
 
 echo ""
 echo "#################################"
@@ -28,7 +26,6 @@ echo ""
 if [ -n "$firstDepotIdOverride" ]; then
   firstDepotId=$firstDepotIdOverride
 else
-  # The first depot ID of a standard Steam app is the app's ID plus one
   firstDepotId=$((appId + 1))
 fi
 
@@ -38,10 +35,8 @@ until [ $i -gt 9 ]; do
   eval "currentDepotPath=\$depot${i}Path"
   eval "currentDepotInstallScriptPath=\$depot${i}InstallScriptPath"
   if [ -n "$currentDepotPath" ]; then
-    # depot1Path uses firstDepotId, depot2Path uses firstDepotId + 1, depot3Path uses firstDepotId + 2...
     currentDepot=$((firstDepotId + i - 1))
 
-    # If the depot has an install script, add it to the depot manifest
     if [ -n "${currentDepotInstallScriptPath:-}" ]; then
       echo ""
       echo "Adding install script for depot ${currentDepot}..."
@@ -141,13 +136,26 @@ else
   echo ""
 fi
 
+# Run steamcmd via Docker (x86 image, works on arm64 via QEMU binfmt)
+# Mounts: workspace (VDFs), content root (build artifacts), Steam config
+run_steamcmd() {
+  docker run --rm \
+    --platform linux/amd64 \
+    -v "$workdir":/workspace \
+    -v "$contentroot":"$contentroot":ro \
+    -v "$steamdir":/root/Steam \
+    -w /workspace \
+    "$STEAMCMD_IMAGE" \
+    bash -c "steamcmd $*"
+}
+
 echo ""
 echo "#################################"
 echo "#        Test login             #"
 echo "#################################"
 echo ""
 
-steamcmd +set_steam_guard_code "$steam_totp" +login "$steam_username" "$steam_password" +quit;
+run_steamcmd "+set_steam_guard_code $steam_totp +login $steam_username $steam_password +quit"
 
 ret=$?
 if [ $ret -eq 0 ]; then
@@ -173,7 +181,7 @@ echo "#        Uploading build        #"
 echo "#################################"
 echo ""
 
-steamcmd +login "$steam_username" +run_app_build "$manifest_path" +quit || (
+run_steamcmd "+login $steam_username +run_app_build /workspace/manifest.vdf +quit" || (
     echo ""
     echo "#################################"
     echo "#             Errors            #"
@@ -187,7 +195,7 @@ steamcmd +login "$steam_username" +run_app_build "$manifest_path" +quit || (
     echo ""
     echo "Listing logs folder:"
     echo ""
-    ls -Ralph "$steamdir/logs/"
+    ls -Ralph "$steamdir/logs/" || true
 
     for f in "$steamdir"/logs/*; do
       if [ -e "$f" ]; then
@@ -200,11 +208,11 @@ steamcmd +login "$steam_username" +run_app_build "$manifest_path" +quit || (
     echo ""
     echo "Displaying error log"
     echo ""
-    cat "$steamdir/logs/stderr.txt"
+    cat "$steamdir/logs/stderr.txt" || true
     echo ""
     echo "Displaying bootstrapper log"
     echo ""
-    cat "$steamdir/logs/bootstrap_log.txt"
+    cat "$steamdir/logs/bootstrap_log.txt" || true
     echo ""
     echo "#################################"
     echo "#             Output            #"
