@@ -2,9 +2,18 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+if ! command -v steamcmd &>/dev/null; then
+  echo "Error: steamcmd not found. Ensure it is installed on the runner."
+  exit 1
+fi
+
 steamdir=${STEAM_HOME:-$HOME/Steam}
-# this is relative to the action
-contentroot=$(pwd)/$rootPath
+# this is relative to the action, unless an absolute path is given
+if [[ "$rootPath" = /* ]]; then
+  contentroot="$rootPath"
+else
+  contentroot="$(pwd)/$rootPath"
+fi
 
 # these are temporary file we create, so in a tmpdir
 mkdir BuildOutput
