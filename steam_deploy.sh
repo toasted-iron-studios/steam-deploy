@@ -4,6 +4,22 @@ IFS=$'\n\t'
 
 STEAMCMD_IMAGE="${STEAMCMD_IMAGE:-cm2network/steamcmd:root}"
 
+# Wait for Docker daemon (DinD sidecar may still be starting)
+if [ -n "${DOCKER_HOST:-}" ]; then
+  echo "Waiting for Docker daemon at $DOCKER_HOST..."
+  for i in $(seq 1 30); do
+    if docker info &>/dev/null 2>&1; then
+      echo "Docker is ready."
+      break
+    fi
+    if [ "$i" -eq 30 ]; then
+      echo "Error: Docker daemon not available after 30s"
+      exit 1
+    fi
+    sleep 1
+  done
+fi
+
 # Handle absolute or relative rootPath
 if [[ "$rootPath" = /* ]]; then
   contentroot="$rootPath"
