@@ -136,14 +136,7 @@ if [ -n "$steam_totp" ]; then
   echo "#     Using SteamGuard TOTP     #"
   echo "#################################"
   echo ""
-else
-  if [ ! -n "$configVdf" ]; then
-    echo "Config VDF input is missing or incomplete! Cannot proceed."
-    exit 1
-  fi
-
-  steam_totp="INVALID"
-
+elif [ -n "$configVdf" ]; then
   echo ""
   echo "#################################"
   echo "#    Copying SteamGuard Files   #"
@@ -158,6 +151,9 @@ else
 
   echo "Finished Copying SteamGuard Files!"
   echo ""
+else
+  echo "Error: Either 'totp' or 'configVdf' must be provided."
+  exit 1
 fi
 
 # Run steamcmd via Docker using Box86/Box64 for x86 emulation (native ARM64).
@@ -226,15 +222,16 @@ echo "#################################"
 echo ""
 
 # Build steamcmd arguments based on auth method
-if [ -n "$steam_totp" ] && [ "$steam_totp" != "INVALID" ]; then
+if [ -n "$steam_totp" ]; then
   # TOTP auth: guard code + username/password
   steamcmd_args="+set_steam_guard_code $steam_totp +login $steam_username $steam_password +run_app_build $manifest_path +quit"
 elif [ -n "${steam_password:-}" ]; then
-  # configVdf + password: guard code INVALID bypasses SteamGuard via config.vdf token
-  steamcmd_args="+set_steam_guard_code ${steam_totp:-INVALID} +login $steam_username $steam_password +run_app_build $manifest_path +quit"
+  # configVdf + password: config.vdf bypasses Steam Guard, password handles auth
+  # Do NOT use +set_steam_guard_code here — config.vdf provides the machine auth token
+  steamcmd_args="+login $steam_username $steam_password +run_app_build $manifest_path +quit"
 else
-  # configVdf without password: cached credentials from config.vdf
-  steamcmd_args="+login $steam_username +run_app_build $manifest_path +quit"
+  echo "Error: 'password' is required. config.vdf bypasses Steam Guard but does not replace the password."
+  exit 1
 fi
 
 # Capture output to detect login failures (steamcmd exits 0 with +quit even on error)
