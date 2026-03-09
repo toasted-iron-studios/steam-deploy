@@ -185,57 +185,11 @@ run_steamcmd() {
 
 echo ""
 echo "#################################"
-echo "#        Test login             #"
+echo "#   Login + Upload (single run) #"
 echo "#################################"
 echo ""
 
-# Capture output to detect login failures (steamcmd exits 0 with +quit even on error)
-login_log="$deploydir/login_output.log"
-set +e
-run_steamcmd "+set_steam_guard_code $steam_totp +login $steam_username $steam_password +quit" 2>&1 | tee "$login_log"
-ret=${PIPESTATUS[0]}
-set -e
-
-if [ $ret -ne 0 ]; then
-  echo ""
-  echo "#################################"
-  echo "#        FAILED login           #"
-  echo "#################################"
-  echo ""
-  echo "Exit code: $ret"
-  exit $ret
-fi
-
-if grep -q "Logged in OK" "$login_log"; then
-  echo ""
-  echo "#################################"
-  echo "#        Successful login       #"
-  echo "#################################"
-  echo ""
-elif grep -q "ERROR" "$login_log"; then
-  echo ""
-  echo "#################################"
-  echo "#     FAILED login (ERROR)      #"
-  echo "#################################"
-  echo ""
-  grep "ERROR" "$login_log"
-  exit 1
-else
-  echo ""
-  echo "#################################"
-  echo "#     Login result unknown      #"
-  echo "#################################"
-  echo ""
-  echo "Proceeding anyway..."
-fi
-
-echo ""
-echo "#################################"
-echo "#        Uploading build        #"
-echo "#################################"
-echo ""
-
-run_steamcmd "+login $steam_username +run_app_build $manifest_path +quit" || (
+run_steamcmd "+set_steam_guard_code $steam_totp +login $steam_username $steam_password +run_app_build $manifest_path +quit" || (
     echo ""
     echo "#################################"
     echo "#             Errors            #"
