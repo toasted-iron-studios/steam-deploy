@@ -168,28 +168,16 @@ run_steamcmd() {
   docker run --rm --privileged \
     -v "$contentroot":"$contentroot" \
     -v "$deploydir/steam":/root/Steam \
+    -v "$deploydir/steam":/home/steam/Steam \
     -w "$deploydir" \
     "$STEAMCMD_IMAGE" \
     bash -c '
       echo "=== Steam config debug ==="
-      echo "HOME=$HOME"
-      ls -la /root/Steam/config/ 2>/dev/null || echo "  (no config dir at /root/Steam/)"
-      if [ -f /root/Steam/config/config.vdf ]; then
-        echo "config.vdf size: $(wc -c < /root/Steam/config/config.vdf) bytes"
-        echo "ConnectCache structure (keys only, no secrets):"
-        sed -n "/ConnectCache/,/^[[:space:]]*}/p" /root/Steam/config/config.vdf | grep -v -iE "token|password|secret|key|hash|sentry" | head -20 || echo "  (no ConnectCache)"
-      fi
-      echo "All files in /root/Steam:"
-      find /root/Steam -type f 2>/dev/null | head -20 || true
-      echo "Files in steamcmd install dir:"
-      find /home/steam/steamcmd -name "*.vdf" -o -name "*.cfg" 2>/dev/null | head -20 || true
+      echo "config at /root/Steam/config/:"
+      ls -la /root/Steam/config/config.vdf 2>/dev/null || echo "  (not found)"
+      echo "config at /home/steam/Steam/config/:"
+      ls -la /home/steam/Steam/config/config.vdf 2>/dev/null || echo "  (not found)"
       echo "========================="
-
-      # Copy config to steamcmd install dir in case it looks there instead of $HOME/Steam
-      mkdir -p /home/steam/steamcmd/config
-      cp /root/Steam/config/config.vdf /home/steam/steamcmd/config/config.vdf 2>/dev/null || true
-      # Also symlink $HOME/Steam to steamcmd dir for compatibility
-      ln -sf /root/Steam /home/steam/Steam 2>/dev/null || true
 
       export LD_LIBRARY_PATH="/home/steam/steamcmd/linux32:${LD_LIBRARY_PATH:-}"
       while true; do
