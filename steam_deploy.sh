@@ -161,29 +161,59 @@ else
 fi
 
 # Run steamcmd via Docker using Box86/Box64 for x86 emulation (native ARM64).
-# The sonroyaalmerol/steamcmd-arm64:root image runs as root (HOME=/root).
-# steamcmd stores data at $HOME/Steam/ => /root/Steam/.
-# We mount config to /root/Steam so steamcmd finds config.vdf.
+# IMPORTANT: We mount our config to /tmp/steam_import and COPY it into the
+# image's existing Steam directories. Previous approach of volume-mounting
+# over /root/Steam replaced the image's entire Steam dir (losing built-in
+# files like registry.vdf, sentry files, etc.), which broke credential caching.
 run_steamcmd() {
   docker run --rm --privileged \
     -v "$contentroot":"$contentroot" \
-    -v "$deploydir/steam":/root/Steam \
-    -v "$deploydir/steam":/home/steam/Steam \
+    -v "$deploydir/steam":/tmp/steam_import:ro \
     -w "$deploydir" \
     "$STEAMCMD_IMAGE" \
     bash -c '
-      echo "=== Steam config debug ==="
-      echo "config at /root/Steam/config/:"
-      ls -la /root/Steam/config/config.vdf 2>/dev/null || echo "  (not found)"
-      echo "config at /home/steam/Steam/config/:"
-      ls -la /home/steam/Steam/config/config.vdf 2>/dev/null || echo "  (not found)"
-      echo "========================="
+      echo "=== Image built-in Steam state ==="
+      echo "HOME=$HOME"
+      echo ""
+      echo "/root/Steam/:"
+      find /root/Steam/ -type f 2>/dev/null || echo "  (empty or missing)"
+      echo ""
+      echo "/home/steam/Steam/:"
+      find /home/steam/Steam/ -type f 2>/dev/null || echo "  (empty or missing)"
+      echo ""
+      echo "/home/steam/steamcmd/ (vdf/ssfn/cfg):"
+      find /home/steam/steamcmd/ \( -name "*.vdf" -o -name "ssfn*" -o -name "*.cfg" \) 2>/dev/null || echo "  (none)"
+      echo ""
+      echo "/root/.steam/:"
+      find /root/.steam/ -type f 2>/dev/null || echo "  (empty or missing)"
+      echo "=================================="
+
+      # Copy imported config.vdf into ALL possible Steam directories
+      if [ -f /tmp/steam_import/config/config.vdf ]; then
+        for d in /root/Steam /home/steam/Steam /home/steam/steamcmd; do
+          mkdir -p "$d/config"
+          cp /tmp/steam_import/config/config.vdf "$d/config/config.vdf"
+          chmod 644 "$d/config/config.vdf"
+        done
+        echo "config.vdf copied to /root/Steam, /home/steam/Steam, /home/steam/steamcmd"
+      else
+        echo "No config.vdf to import (TOTP auth mode)"
+      fi
 
       export LD_LIBRARY_PATH="/home/steam/steamcmd/linux32:${LD_LIBRARY_PATH:-}"
       while true; do
         box86 /home/steam/steamcmd/linux32/steamcmd '"$*"'
         ret=$?
-        if [ $ret -ne 42 ]; then exit $ret; fi
+        if [ $ret -ne 42 ]; then
+          # Dump steam logs before container exits
+          echo ""
+          echo "=== Steam logs (inside container) ==="
+          for f in /root/Steam/logs/* /home/steam/Steam/logs/* /home/steam/steamcmd/logs/*; do
+            [ -e "$f" ] && echo "######## $f" && cat "$f" && echo
+          done
+          echo "======================================"
+          exit $ret
+        fi
         echo "steamcmd: restarting by request..."
       done
     '
