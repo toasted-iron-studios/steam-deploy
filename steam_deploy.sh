@@ -150,10 +150,10 @@ else
   echo ""
 fi
 
-# Run steamcmd via Docker using Box86 for x86 emulation (native ARM64).
-# Box86 is called directly to avoid binfmt_misc dependency.
-# All files are under $contentroot which is a shared hostPath volume,
-# so both the runner and DinD-spawned containers can access them.
+# Run steamcmd via Docker using Box86/Box64 for x86 emulation (native ARM64).
+# The sonroyaalmerol/steamcmd-arm64:root image runs as root (HOME=/root).
+# steamcmd stores data at $HOME/Steam/ => /root/Steam/.
+# We mount config to /root/Steam so steamcmd finds config.vdf.
 run_steamcmd() {
   docker run --rm --privileged \
     -v "$contentroot":"$contentroot" \
@@ -161,6 +161,18 @@ run_steamcmd() {
     -w "$deploydir" \
     "$STEAMCMD_IMAGE" \
     bash -c '
+      echo "=== Steam config debug ==="
+      echo "HOME=$HOME"
+      echo "Files in /root/Steam/config/:"
+      ls -la /root/Steam/config/ 2>/dev/null || echo "  (directory not found)"
+      if [ -f /root/Steam/config/config.vdf ]; then
+        echo "config.vdf size: $(wc -c < /root/Steam/config/config.vdf) bytes"
+        echo "config.vdf first line: $(head -1 /root/Steam/config/config.vdf)"
+      else
+        echo "WARNING: /root/Steam/config/config.vdf not found!"
+      fi
+      echo "========================="
+
       export LD_LIBRARY_PATH="/home/steam/steamcmd/linux32:${LD_LIBRARY_PATH:-}"
       while true; do
         box86 /home/steam/steamcmd/linux32/steamcmd '"$*"'
@@ -177,24 +189,44 @@ echo "#        Test login             #"
 echo "#################################"
 echo ""
 
-run_steamcmd "+set_steam_guard_code $steam_totp +login $steam_username $steam_password +quit"
+# Capture output to detect login failures (steamcmd exits 0 with +quit even on error)
+login_log="$deploydir/login_output.log"
+set +e
+run_steamcmd "+set_steam_guard_code $steam_totp +login $steam_username $steam_password +quit" 2>&1 | tee "$login_log"
+ret=${PIPESTATUS[0]}
+set -e
 
-ret=$?
-if [ $ret -eq 0 ]; then
-    echo ""
-    echo "#################################"
-    echo "#        Successful login       #"
-    echo "#################################"
-    echo ""
+if [ $ret -ne 0 ]; then
+  echo ""
+  echo "#################################"
+  echo "#        FAILED login           #"
+  echo "#################################"
+  echo ""
+  echo "Exit code: $ret"
+  exit $ret
+fi
+
+if grep -q "Logged in OK" "$login_log"; then
+  echo ""
+  echo "#################################"
+  echo "#        Successful login       #"
+  echo "#################################"
+  echo ""
+elif grep -q "ERROR" "$login_log"; then
+  echo ""
+  echo "#################################"
+  echo "#     FAILED login (ERROR)      #"
+  echo "#################################"
+  echo ""
+  grep "ERROR" "$login_log"
+  exit 1
 else
-      echo ""
-      echo "#################################"
-      echo "#        FAILED login           #"
-      echo "#################################"
-      echo ""
-      echo "Exit code: $ret"
-
-      exit $ret
+  echo ""
+  echo "#################################"
+  echo "#     Login result unknown      #"
+  echo "#################################"
+  echo ""
+  echo "Proceeding anyway..."
 fi
 
 echo ""
@@ -247,5 +279,5 @@ run_steamcmd "+login $steam_username +run_app_build $manifest_path +quit" || (
 
 echo "manifest=${manifest_path}" >> $GITHUB_OUTPUT
 
-# Clean up deploy workspace
-rm -rf "$deploydir"
+# Clean up deploy workspace (docker creates files as root)
+docker run --rm -v "$contentroot":"$contentroot" alpine rm -rf "$deploydir"
