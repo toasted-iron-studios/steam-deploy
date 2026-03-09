@@ -33,6 +33,16 @@ mkdir -p "$deploydir/BuildOutput"
 mkdir -p "$deploydir/steam/config"
 manifest_path="$deploydir/manifest.vdf"
 
+# Clean up deploy workspace on exit (docker creates files as root)
+cleanup() {
+  if [ -n "${DOCKER_HOST:-}" ] || command -v docker &>/dev/null; then
+    docker run --rm -v "$contentroot":"$contentroot" alpine rm -rf "$deploydir" 2>/dev/null || true
+  else
+    rm -rf "$deploydir" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+
 echo ""
 echo "#################################"
 echo "#   Generating Depot Manifests  #"
@@ -168,9 +178,21 @@ run_steamcmd() {
       if [ -f /root/Steam/config/config.vdf ]; then
         echo "config.vdf size: $(wc -c < /root/Steam/config/config.vdf) bytes"
         echo "config.vdf first line: $(head -1 /root/Steam/config/config.vdf)"
+        echo "ConnectCache entries:"
+        grep -c "ConnectCache" /root/Steam/config/config.vdf || echo "  (no ConnectCache found)"
+        echo "Top-level keys in config.vdf:"
+        grep -E "^\t\"[^\"]+\"$" /root/Steam/config/config.vdf | head -10 || true
       else
         echo "WARNING: /root/Steam/config/config.vdf not found!"
       fi
+      echo "All files in /root/Steam:"
+      find /root/Steam -type f 2>/dev/null | head -20 || true
+      echo "Checking steamcmd install dir for config:"
+      ls -la /home/steam/steamcmd/config/ 2>/dev/null || echo "  (no config dir at install path)"
+      ls -la /home/steam/steamcmd/linux32/config/ 2>/dev/null || echo "  (no config dir at linux32 path)"
+      echo "Checking for steam registry:"
+      cat /root/Steam/registry.vdf 2>/dev/null || echo "  (no registry.vdf)"
+      cat /home/steam/steamcmd/registry.vdf 2>/dev/null || echo "  (no registry.vdf at install path)"
       echo "========================="
 
       export LD_LIBRARY_PATH="/home/steam/steamcmd/linux32:${LD_LIBRARY_PATH:-}"
@@ -194,10 +216,10 @@ if [ -n "$steam_totp" ] && [ "$steam_totp" != "INVALID" ]; then
   # TOTP auth: guard code + username/password
   steamcmd_args="+set_steam_guard_code $steam_totp +login $steam_username $steam_password +run_app_build $manifest_path +quit"
 elif [ -n "${steam_password:-}" ]; then
-  # Password auth (no TOTP): username/password only
-  steamcmd_args="+login $steam_username $steam_password +run_app_build $manifest_path +quit"
+  # configVdf + password: guard code INVALID bypasses SteamGuard via config.vdf token
+  steamcmd_args="+set_steam_guard_code ${steam_totp:-INVALID} +login $steam_username $steam_password +run_app_build $manifest_path +quit"
 else
-  # configVdf auth: username only (cached credentials from config.vdf)
+  # configVdf without password: cached credentials from config.vdf
   steamcmd_args="+login $steam_username +run_app_build $manifest_path +quit"
 fi
 
