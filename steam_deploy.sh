@@ -155,7 +155,7 @@ fi
 # All files are under $contentroot which is a shared hostPath volume,
 # so both the runner and DinD-spawned containers can access them.
 run_steamcmd() {
-  docker run --rm \
+  docker run --rm --privileged \
     -v "$contentroot":"$contentroot" \
     -v "$deploydir/steam":/root/Steam \
     -w "$deploydir" \
