@@ -173,27 +173,23 @@ run_steamcmd() {
     bash -c '
       echo "=== Steam config debug ==="
       echo "HOME=$HOME"
-      echo "Files in /root/Steam/config/:"
-      ls -la /root/Steam/config/ 2>/dev/null || echo "  (directory not found)"
+      ls -la /root/Steam/config/ 2>/dev/null || echo "  (no config dir at /root/Steam/)"
       if [ -f /root/Steam/config/config.vdf ]; then
         echo "config.vdf size: $(wc -c < /root/Steam/config/config.vdf) bytes"
-        echo "config.vdf first line: $(head -1 /root/Steam/config/config.vdf)"
-        echo "ConnectCache entries:"
-        grep -c "ConnectCache" /root/Steam/config/config.vdf || echo "  (no ConnectCache found)"
-        echo "Top-level keys in config.vdf:"
-        grep -E "^\t\"[^\"]+\"$" /root/Steam/config/config.vdf | head -10 || true
-      else
-        echo "WARNING: /root/Steam/config/config.vdf not found!"
+        echo "ConnectCache structure (keys only, no secrets):"
+        sed -n "/ConnectCache/,/^[[:space:]]*}/p" /root/Steam/config/config.vdf | grep -v -iE "token|password|secret|key|hash|sentry" | head -20 || echo "  (no ConnectCache)"
       fi
       echo "All files in /root/Steam:"
       find /root/Steam -type f 2>/dev/null | head -20 || true
-      echo "Checking steamcmd install dir for config:"
-      ls -la /home/steam/steamcmd/config/ 2>/dev/null || echo "  (no config dir at install path)"
-      ls -la /home/steam/steamcmd/linux32/config/ 2>/dev/null || echo "  (no config dir at linux32 path)"
-      echo "Checking for steam registry:"
-      cat /root/Steam/registry.vdf 2>/dev/null || echo "  (no registry.vdf)"
-      cat /home/steam/steamcmd/registry.vdf 2>/dev/null || echo "  (no registry.vdf at install path)"
+      echo "Files in steamcmd install dir:"
+      find /home/steam/steamcmd -name "*.vdf" -o -name "*.cfg" 2>/dev/null | head -20 || true
       echo "========================="
+
+      # Copy config to steamcmd install dir in case it looks there instead of $HOME/Steam
+      mkdir -p /home/steam/steamcmd/config
+      cp /root/Steam/config/config.vdf /home/steam/steamcmd/config/config.vdf 2>/dev/null || true
+      # Also symlink $HOME/Steam to steamcmd dir for compatibility
+      ln -sf /root/Steam /home/steam/Steam 2>/dev/null || true
 
       export LD_LIBRARY_PATH="/home/steam/steamcmd/linux32:${LD_LIBRARY_PATH:-}"
       while true; do
