@@ -227,32 +227,27 @@ run_steamcmd "$steamcmd_args" 2>&1 | tee "$deploy_log"
 ret=${PIPESTATUS[0]}
 set -e
 
-# Check for errors in output (steamcmd may exit 0 despite failures)
-if [ $ret -ne 0 ] || grep -qiE "ERROR|FAILED" "$deploy_log"; then
+# Check for success/failure in output (steamcmd exits 0 with +quit even on error).
+# Look for the definitive success message first, then check for fatal errors.
+if grep -q "Successfully finished" "$deploy_log"; then
+    echo ""
+    echo "#################################"
+    echo "#     Build Succeeded!          #"
+    echo "#################################"
+    echo ""
+elif [ $ret -ne 0 ] || grep -qE "ERROR \(|FAILED!|Login Failure" "$deploy_log"; then
     echo ""
     echo "#################################"
     echo "#             Errors            #"
     echo "#################################"
     echo ""
-    if grep -qiE "ERROR|FAILED" "$deploy_log"; then
+    if grep -qE "ERROR \(|FAILED!|Login Failure" "$deploy_log"; then
       echo "Detected error in steamcmd output:"
-      grep -iE "ERROR|FAILED" "$deploy_log"
+      grep -E "ERROR \(|FAILED!|Login Failure" "$deploy_log"
       echo ""
     fi
     echo "Listing content root:"
     ls -alh "$contentroot" || true
-    echo ""
-    echo "Listing logs folder:"
-    ls -Ralph "$deploydir/steam/logs/" || true
-
-    for f in "$deploydir"/steam/logs/*; do
-      if [ -e "$f" ]; then
-        echo "######## $f"
-        cat "$f"
-        echo
-      fi
-    done
-
     echo ""
     echo "Listing build output:"
     ls -Ralph "$deploydir/BuildOutput" || true
