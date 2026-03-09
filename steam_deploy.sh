@@ -189,20 +189,41 @@ echo "#   Login + Upload (single run) #"
 echo "#################################"
 echo ""
 
-run_steamcmd "+set_steam_guard_code $steam_totp +login $steam_username $steam_password +run_app_build $manifest_path +quit" || (
+# Build steamcmd arguments based on auth method
+if [ -n "$steam_totp" ] && [ "$steam_totp" != "INVALID" ]; then
+  # TOTP auth: guard code + username/password
+  steamcmd_args="+set_steam_guard_code $steam_totp +login $steam_username $steam_password +run_app_build $manifest_path +quit"
+elif [ -n "${steam_password:-}" ]; then
+  # Password auth (no TOTP): username/password only
+  steamcmd_args="+login $steam_username $steam_password +run_app_build $manifest_path +quit"
+else
+  # configVdf auth: username only (cached credentials from config.vdf)
+  steamcmd_args="+login $steam_username +run_app_build $manifest_path +quit"
+fi
+
+# Capture output to detect login failures (steamcmd exits 0 with +quit even on error)
+deploy_log="$deploydir/deploy_output.log"
+set +e
+run_steamcmd "$steamcmd_args" 2>&1 | tee "$deploy_log"
+ret=${PIPESTATUS[0]}
+set -e
+
+# Check for errors in output (steamcmd may exit 0 despite failures)
+if [ $ret -ne 0 ] || grep -qiE "ERROR|FAILED" "$deploy_log"; then
     echo ""
     echo "#################################"
     echo "#             Errors            #"
     echo "#################################"
     echo ""
-    echo "Listing current folder and rootpath"
-    echo ""
-    ls -alh "$deploydir"
-    echo ""
+    if grep -qiE "ERROR|FAILED" "$deploy_log"; then
+      echo "Detected error in steamcmd output:"
+      grep -iE "ERROR|FAILED" "$deploy_log"
+      echo ""
+    fi
+    echo "Listing content root:"
     ls -alh "$contentroot" || true
     echo ""
     echo "Listing logs folder:"
-    echo ""
     ls -Ralph "$deploydir/steam/logs/" || true
 
     for f in "$deploydir"/steam/logs/*; do
@@ -214,10 +235,7 @@ run_steamcmd "+set_steam_guard_code $steam_totp +login $steam_username $steam_pa
     done
 
     echo ""
-    echo "#################################"
-    echo "#             Output            #"
-    echo "#################################"
-    echo ""
+    echo "Listing build output:"
     ls -Ralph "$deploydir/BuildOutput" || true
 
     for f in "$deploydir"/BuildOutput/*.log; do
@@ -229,7 +247,7 @@ run_steamcmd "+set_steam_guard_code $steam_totp +login $steam_username $steam_pa
     done
 
     exit 1
-  )
+fi
 
 echo "manifest=${manifest_path}" >> $GITHUB_OUTPUT
 
