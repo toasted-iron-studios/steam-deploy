@@ -168,30 +168,17 @@ run_steamcmd() {
     -w "$deploydir" \
     "$STEAMCMD_IMAGE" \
     bash -c '
-      echo "=== Image built-in Steam state ==="
-      echo "HOME=$HOME"
-      echo ""
-      echo "/root/Steam/:"
-      find /root/Steam/ -type f 2>/dev/null || echo "  (empty or missing)"
-      echo ""
-      echo "/home/steam/Steam/:"
-      find /home/steam/Steam/ -type f 2>/dev/null || echo "  (empty or missing)"
-      echo ""
-      echo "/home/steam/steamcmd/ (vdf/ssfn/cfg):"
-      find /home/steam/steamcmd/ \( -name "*.vdf" -o -name "ssfn*" -o -name "*.cfg" \) 2>/dev/null || echo "  (none)"
-      echo ""
-      echo "/root/.steam/:"
-      find /root/.steam/ -type f 2>/dev/null || echo "  (empty or missing)"
-      echo "=================================="
+      # Box86 child processes drop root privileges. /root is mode 700 by default,
+      # blocking steamcmd threads from reading config.vdf and writing temp files.
+      chmod 755 /root
+      mkdir -p /root/Steam/config /root/Steam/logs /root/.steam
+      chmod -R 777 /root/Steam /root/.steam
 
-      # Copy imported config.vdf into ALL possible Steam directories
+      # Copy imported config.vdf into the Steam directory
       if [ -f /tmp/steam_import/config/config.vdf ]; then
-        for d in /root/Steam /home/steam/Steam /home/steam/steamcmd; do
-          mkdir -p "$d/config"
-          cp /tmp/steam_import/config/config.vdf "$d/config/config.vdf"
-          chmod 644 "$d/config/config.vdf"
-        done
-        echo "config.vdf copied to /root/Steam, /home/steam/Steam, /home/steam/steamcmd"
+        cp /tmp/steam_import/config/config.vdf /root/Steam/config/config.vdf
+        chmod 777 /root/Steam/config/config.vdf
+        echo "config.vdf imported to /root/Steam/config/"
       else
         echo "No config.vdf to import (TOTP auth mode)"
       fi
@@ -227,11 +214,10 @@ if [ -n "$steam_totp" ]; then
   steamcmd_args="+set_steam_guard_code $steam_totp +login $steam_username $steam_password +run_app_build $manifest_path +quit"
 elif [ -n "${steam_password:-}" ]; then
   # configVdf + password: config.vdf bypasses Steam Guard, password handles auth
-  # Do NOT use +set_steam_guard_code here — config.vdf provides the machine auth token
   steamcmd_args="+login $steam_username $steam_password +run_app_build $manifest_path +quit"
 else
-  echo "Error: 'password' is required. config.vdf bypasses Steam Guard but does not replace the password."
-  exit 1
+  # configVdf only: cached credentials from config.vdf handle both login and Steam Guard
+  steamcmd_args="+login $steam_username +run_app_build $manifest_path +quit"
 fi
 
 # Capture output to detect login failures (steamcmd exits 0 with +quit even on error)
