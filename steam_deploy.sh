@@ -164,7 +164,11 @@ fi
 # replace the image's entire Steam dir (losing built-in files like registry.vdf,
 # sentry files, etc.), which breaks credential caching.
 run_steamcmd() {
+  # seccomp=unconfined: the default Docker seccomp profile blocks syscalls the
+  # 32-bit steamcmd binary uses, so it segfaults while "Loading Steam API...".
+  # (The old arm64 path got this implicitly via --privileged.)
   docker run --rm \
+    --security-opt seccomp=unconfined \
     -e HOME=/root \
     -v "$contentroot":"$contentroot" \
     -v "$deploydir/steam":/tmp/steam_import:ro \
