@@ -167,7 +167,10 @@ setup_steamcmd() {
 }
 
 run_steamcmd() {
-  HOME="$STEAMCMD_HOME" "$STEAMCMD_DIR/steamcmd.sh" "$@"
+  # stdin from /dev/null: on a login failure steamcmd otherwise drops to its
+  # interactive "Steam>" prompt and hangs forever waiting for input. EOF makes
+  # it quit immediately so the job fails fast instead of stalling for hours.
+  HOME="$STEAMCMD_HOME" "$STEAMCMD_DIR/steamcmd.sh" "$@" </dev/null
   ret=$?
   if [ $ret -ne 0 ]; then
     echo ""
