@@ -2,23 +2,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-STEAMCMD_IMAGE="${STEAMCMD_IMAGE:-steamcmd/steamcmd:ubuntu-22}"
-
-# Wait for Docker daemon (DinD sidecar may still be starting)
-if [ -n "${DOCKER_HOST:-}" ]; then
-  echo "Waiting for Docker daemon at $DOCKER_HOST..."
-  for i in $(seq 1 30); do
-    if docker info &>/dev/null 2>&1; then
-      echo "Docker is ready."
-      break
-    fi
-    if [ "$i" -eq 30 ]; then
-      echo "Error: Docker daemon not available after 30s"
-      exit 1
-    fi
-    sleep 1
-  done
-fi
+# steamcmd runs natively on the (kata microVM) runner — no Docker/dind needed.
 
 # Handle absolute or relative rootPath
 if [[ "$rootPath" = /* ]]; then
@@ -33,14 +17,8 @@ mkdir -p "$deploydir/BuildOutput"
 mkdir -p "$deploydir/steam/config"
 manifest_path="$deploydir/manifest.vdf"
 
-# Clean up deploy workspace on exit (docker creates files as root)
-cleanup() {
-  if [ -n "${DOCKER_HOST:-}" ] || command -v docker &>/dev/null; then
-    docker run --rm -v "$contentroot":"$contentroot" alpine rm -rf "$deploydir" 2>/dev/null || true
-  else
-    rm -rf "$deploydir" 2>/dev/null || true
-  fi
-}
+# Clean up deploy workspace on exit (all files created by the runner user).
+cleanup() { rm -rf "$deploydir" 2>/dev/null || true; }
 trap cleanup EXIT
 
 echo ""
@@ -156,51 +134,50 @@ else
   exit 1
 fi
 
-# Run native x86-64 steamcmd via Docker. Deploy runs on the amd64 showboat
-# runner, so we use the upstream steamcmd/steamcmd image and invoke steamcmd
-# directly — no Box86 x86-emulation (that was only needed on the arm64 Pi blades).
-# IMPORTANT: We mount our config to /tmp/steam_import and COPY it into the
-# image's existing Steam directories. Volume-mounting over /root/Steam would
-# replace the image's entire Steam dir (losing built-in files like registry.vdf,
-# sentry files, etc.), which breaks credential caching.
+# Run steamcmd NATIVELY (no Docker). The deploy job runs inside a kata-containers
+# microVM (its own ARC runner) — that gives the 32-bit Steam client a virtualized
+# CPU plus a guest kernel with IA32 emulation + COMPAT_32BIT_TIME, without which
+# the client segfaults / aborts on showboat's bare metal. dind does not work
+# inside a kata microVM (privileged device passthrough is blocked), so we install
+# and invoke steamcmd directly on the runner here.
+STEAMCMD_HOME="$deploydir/steamhome"
+STEAMCMD_DIR="$deploydir/steamcmd"
+
+setup_steamcmd() {
+  echo "Setting up native steamcmd..."
+  # steamcmd is a 32-bit binary; ensure i386 runtime libs (runner has sudo).
+  if ! dpkg --print-foreign-architectures 2>/dev/null | grep -q i386; then
+    sudo dpkg --add-architecture i386
+    sudo apt-get update -qq
+  fi
+  sudo apt-get install -y -qq lib32gcc-s1 libc6:i386 ca-certificates curl >/dev/null 2>&1 \
+    || sudo apt-get install -y -qq lib32gcc1 libc6:i386 ca-certificates curl >/dev/null 2>&1 || true
+  mkdir -p "$STEAMCMD_DIR" "$STEAMCMD_HOME/Steam/config" "$STEAMCMD_HOME/Steam/logs"
+  if [ ! -f "$STEAMCMD_DIR/steamcmd.sh" ]; then
+    curl -sqL "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz" \
+      | tar zxf - -C "$STEAMCMD_DIR"
+  fi
+  # Place the SteamGuard config where HOME-based steamcmd will find it.
+  if [ -f "$deploydir/steam/config/config.vdf" ]; then
+    cp "$deploydir/steam/config/config.vdf" "$STEAMCMD_HOME/Steam/config/config.vdf"
+    echo "config.vdf placed in $STEAMCMD_HOME/Steam/config/"
+  else
+    echo "No config.vdf (TOTP auth mode)"
+  fi
+}
+
 run_steamcmd() {
-  # seccomp=unconfined: the default Docker seccomp profile blocks syscalls the
-  # 32-bit steamcmd binary uses, so it segfaults while "Loading Steam API...".
-  # (The old arm64 path got this implicitly via --privileged.)
-  docker run --rm \
-    --security-opt seccomp=unconfined \
-    -e HOME=/root \
-    -v "$contentroot":"$contentroot" \
-    -v "$deploydir/steam":/tmp/steam_import:ro \
-    -w "$deploydir" \
-    "$STEAMCMD_IMAGE" \
-    bash -c '
-      mkdir -p /root/Steam/config /root/Steam/logs /root/.steam
-      chmod -R 777 /root/Steam /root/.steam
-
-      # Copy imported config.vdf into the Steam directory
-      if [ -f /tmp/steam_import/config/config.vdf ]; then
-        cp /tmp/steam_import/config/config.vdf /root/Steam/config/config.vdf
-        chmod 777 /root/Steam/config/config.vdf
-        echo "config.vdf imported to /root/Steam/config/"
-      else
-        echo "No config.vdf to import (TOTP auth mode)"
-      fi
-
-      # Native steamcmd (in PATH on steamcmd/steamcmd) handles its own update/
-      # restart loop internally, so a single invocation is enough.
-      steamcmd '"$*"'
-      ret=$?
-      if [ $ret -ne 0 ]; then
-        echo ""
-        echo "=== Steam logs (inside container) ==="
-        for f in /root/Steam/logs/*; do
-          [ -e "$f" ] && echo "######## $f" && cat "$f" && echo
-        done
-        echo "======================================"
-      fi
-      exit $ret
-    '
+  HOME="$STEAMCMD_HOME" "$STEAMCMD_DIR/steamcmd.sh" "$@"
+  ret=$?
+  if [ $ret -ne 0 ]; then
+    echo ""
+    echo "=== Steam logs ==="
+    for f in "$STEAMCMD_HOME"/Steam/logs/* "$STEAMCMD_DIR"/logs/*; do
+      [ -e "$f" ] && echo "######## $f" && cat "$f" && echo
+    done
+    echo "=================="
+  fi
+  return $ret
 }
 
 echo ""
@@ -208,6 +185,8 @@ echo "#################################"
 echo "#   Login + Upload (single run) #"
 echo "#################################"
 echo ""
+
+setup_steamcmd
 
 # Build steamcmd arguments based on auth method
 if [ -n "$steam_totp" ]; then
@@ -266,5 +245,5 @@ fi
 
 echo "manifest=${manifest_path}" >> $GITHUB_OUTPUT
 
-# Clean up deploy workspace (docker creates files as root)
-docker run --rm -v "$contentroot":"$contentroot" alpine rm -rf "$deploydir"
+# Clean up deploy workspace (the EXIT trap also covers failure paths).
+rm -rf "$deploydir"
