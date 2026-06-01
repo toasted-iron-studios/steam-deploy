@@ -2,7 +2,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-STEAMCMD_IMAGE="${STEAMCMD_IMAGE:-sonroyaalmerol/steamcmd-arm64:root}"
+STEAMCMD_IMAGE="${STEAMCMD_IMAGE:-steamcmd/steamcmd:ubuntu-22}"
 
 # Wait for Docker daemon (DinD sidecar may still be starting)
 if [ -n "${DOCKER_HOST:-}" ]; then
@@ -156,21 +156,21 @@ else
   exit 1
 fi
 
-# Run steamcmd via Docker using Box86/Box64 for x86 emulation (native ARM64).
+# Run native x86-64 steamcmd via Docker. Deploy runs on the amd64 showboat
+# runner, so we use the upstream steamcmd/steamcmd image and invoke steamcmd
+# directly — no Box86 x86-emulation (that was only needed on the arm64 Pi blades).
 # IMPORTANT: We mount our config to /tmp/steam_import and COPY it into the
-# image's existing Steam directories. Previous approach of volume-mounting
-# over /root/Steam replaced the image's entire Steam dir (losing built-in
-# files like registry.vdf, sentry files, etc.), which broke credential caching.
+# image's existing Steam directories. Volume-mounting over /root/Steam would
+# replace the image's entire Steam dir (losing built-in files like registry.vdf,
+# sentry files, etc.), which breaks credential caching.
 run_steamcmd() {
-  docker run --rm --privileged \
+  docker run --rm \
+    -e HOME=/root \
     -v "$contentroot":"$contentroot" \
     -v "$deploydir/steam":/tmp/steam_import:ro \
     -w "$deploydir" \
     "$STEAMCMD_IMAGE" \
     bash -c '
-      # Box86 child processes drop root privileges. /root is mode 700 by default,
-      # blocking steamcmd threads from reading config.vdf and writing temp files.
-      chmod 755 /root
       mkdir -p /root/Steam/config /root/Steam/logs /root/.steam
       chmod -R 777 /root/Steam /root/.steam
 
@@ -183,22 +183,19 @@ run_steamcmd() {
         echo "No config.vdf to import (TOTP auth mode)"
       fi
 
-      export LD_LIBRARY_PATH="/home/steam/steamcmd/linux32:${LD_LIBRARY_PATH:-}"
-      while true; do
-        box86 /home/steam/steamcmd/linux32/steamcmd '"$*"'
-        ret=$?
-        if [ $ret -ne 42 ]; then
-          # Dump steam logs before container exits
-          echo ""
-          echo "=== Steam logs (inside container) ==="
-          for f in /root/Steam/logs/* /home/steam/Steam/logs/* /home/steam/steamcmd/logs/*; do
-            [ -e "$f" ] && echo "######## $f" && cat "$f" && echo
-          done
-          echo "======================================"
-          exit $ret
-        fi
-        echo "steamcmd: restarting by request..."
-      done
+      # Native steamcmd (in PATH on steamcmd/steamcmd) handles its own update/
+      # restart loop internally, so a single invocation is enough.
+      steamcmd '"$*"'
+      ret=$?
+      if [ $ret -ne 0 ]; then
+        echo ""
+        echo "=== Steam logs (inside container) ==="
+        for f in /root/Steam/logs/*; do
+          [ -e "$f" ] && echo "######## $f" && cat "$f" && echo
+        done
+        echo "======================================"
+      fi
+      exit $ret
     '
 }
 
