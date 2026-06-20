@@ -167,12 +167,17 @@ setup_steamcmd() {
   # and fails "Invalid Password". At the real XDG path it reports "Logging in using
   # cached credentials" and the vdf authenticates with no password / no 2FA.
   if [ -f "$deploydir/steam/config/config.vdf" ]; then
-    for d in "$STEAM_DATA" "/root/.local/share/Steam"; do
+    # steamcmd's data dir varies by build/image: tarball steamcmd run as root uses
+    # $HOME/Steam (confirmed: logging dir /root/Steam/logs), while the steamcmd
+    # Docker image uses the XDG $HOME/.local/share/Steam. Place the vdf at ALL
+    # candidates under both the real $HOME and /root so the one steamcmd actually
+    # reads is always populated → "Logging in using cached credentials".
+    for d in "${HOME:-/root}/Steam" "${HOME:-/root}/.local/share/Steam" /root/Steam /root/.local/share/Steam; do
       mkdir -p "$d/config" "$d/logs"
       cp "$deploydir/steam/config/config.vdf" "$d/config/config.vdf"
       chmod 600 "$d/config/config.vdf"
     done
-    echo "config.vdf placed at $STEAM_DATA/config/ (real HOME XDG path)"
+    echo "config.vdf placed at: ${HOME:-/root}/Steam/config, .local/share/Steam/config, /root/... (all candidates)"
   else
     echo "No config.vdf (TOTP auth mode)"
   fi
@@ -182,12 +187,16 @@ run_steamcmd() {
   # stdin from /dev/null: on a login failure steamcmd otherwise drops to its
   # interactive "Steam>" prompt and hangs forever waiting for input. EOF makes
   # it quit immediately so the job fails fast instead of stalling for hours.
-  "$STEAMCMD_DIR/steamcmd.sh" "$@" </dev/null
+  # SIGTERM at STEAMCMD_TIMEOUT (default 20m for a real upload), SIGKILL 30s
+  # later. An auth-failed steamcmd that ignores EOF then dies in minutes, not the
+  # job ceiling — preventing a wedged runner.
+  local t="${STEAMCMD_TIMEOUT:-1200}"
+  timeout -k 30 "$t" "$STEAMCMD_DIR/steamcmd.sh" "$@" </dev/null
   ret=$?
   if [ $ret -ne 0 ]; then
     echo ""
     echo "=== Steam logs ==="
-    for f in "$STEAM_DATA"/logs/* /root/.local/share/Steam/logs/* "$STEAMCMD_DIR"/logs/*; do
+    for f in "${HOME:-/root}"/Steam/logs/* /root/Steam/logs/* "${HOME:-/root}"/.local/share/Steam/logs/* "$STEAMCMD_DIR"/logs/*; do
       [ -e "$f" ] && echo "######## $f" && cat "$f" && echo
     done
     echo "=================="
