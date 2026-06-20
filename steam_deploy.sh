@@ -140,8 +140,11 @@ fi
 # the client segfaults / aborts on showboat's bare metal. dind does not work
 # inside a kata microVM (privileged device passthrough is blocked), so we install
 # and invoke steamcmd directly on the runner here.
-STEAMCMD_HOME="$deploydir/steamhome"
+# steamcmd ignores a HOME override and always uses the invoking account's
+# real $HOME/.local/share/Steam — so we place config.vdf there and DO NOT override
+# HOME when running it. STEAMCMD_DIR is just where the steamcmd binary is installed.
 STEAMCMD_DIR="$deploydir/steamcmd"
+STEAM_DATA="${HOME:-/root}/.local/share/Steam"
 
 setup_steamcmd() {
   echo "Setting up native steamcmd..."
@@ -157,18 +160,19 @@ setup_steamcmd() {
     curl -sqL "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz" \
       | tar zxf - -C "$STEAMCMD_DIR"
   fi
-  # Place config.vdf where steamcmd ACTUALLY reads it. Modern steamcmd uses the
-  # XDG data dir $HOME/.local/share/Steam/config/ — NOT $HOME/Steam/config/. With
-  # the vdf at the wrong path steamcmd reports "Cached credentials not found" and
-  # falls back to mobile 2FA ("Two-factor code mismatch"); at the XDG path it
-  # reports "Logging in using cached credentials" and the vdf bypasses Steam Guard.
+  # Place config.vdf where steamcmd ACTUALLY reads it: the invoking account's real
+  # $HOME/.local/share/Steam/config/. steamcmd IGNORES a HOME override and resolves
+  # the account home itself, so placing the vdf under a custom HOME ($deploydir/...)
+  # leaves it unread — steamcmd then reports "Logging in using username/password"
+  # and fails "Invalid Password". At the real XDG path it reports "Logging in using
+  # cached credentials" and the vdf authenticates with no password / no 2FA.
   if [ -f "$deploydir/steam/config/config.vdf" ]; then
-    for d in "$STEAMCMD_HOME/.local/share/Steam" "$STEAMCMD_HOME/Steam" "$STEAMCMD_DIR/Steam"; do
+    for d in "$STEAM_DATA" "/root/.local/share/Steam"; do
       mkdir -p "$d/config" "$d/logs"
       cp "$deploydir/steam/config/config.vdf" "$d/config/config.vdf"
       chmod 600 "$d/config/config.vdf"
     done
-    echo "config.vdf placed at $STEAMCMD_HOME/.local/share/Steam/config/ (+ legacy paths)"
+    echo "config.vdf placed at $STEAM_DATA/config/ (real HOME XDG path)"
   else
     echo "No config.vdf (TOTP auth mode)"
   fi
@@ -178,12 +182,12 @@ run_steamcmd() {
   # stdin from /dev/null: on a login failure steamcmd otherwise drops to its
   # interactive "Steam>" prompt and hangs forever waiting for input. EOF makes
   # it quit immediately so the job fails fast instead of stalling for hours.
-  HOME="$STEAMCMD_HOME" "$STEAMCMD_DIR/steamcmd.sh" "$@" </dev/null
+  "$STEAMCMD_DIR/steamcmd.sh" "$@" </dev/null
   ret=$?
   if [ $ret -ne 0 ]; then
     echo ""
     echo "=== Steam logs ==="
-    for f in "$STEAMCMD_HOME"/.local/share/Steam/logs/* "$STEAMCMD_HOME"/Steam/logs/* "$STEAMCMD_DIR"/logs/*; do
+    for f in "$STEAM_DATA"/logs/* /root/.local/share/Steam/logs/* "$STEAMCMD_DIR"/logs/*; do
       [ -e "$f" ] && echo "######## $f" && cat "$f" && echo
     done
     echo "=================="
