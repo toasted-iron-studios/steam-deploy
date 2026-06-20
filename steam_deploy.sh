@@ -152,15 +152,23 @@ setup_steamcmd() {
   fi
   sudo apt-get install -y -qq lib32gcc-s1 libc6:i386 ca-certificates curl >/dev/null 2>&1 \
     || sudo apt-get install -y -qq lib32gcc1 libc6:i386 ca-certificates curl >/dev/null 2>&1 || true
-  mkdir -p "$STEAMCMD_DIR" "$STEAMCMD_HOME/Steam/config" "$STEAMCMD_HOME/Steam/logs"
+  mkdir -p "$STEAMCMD_DIR"
   if [ ! -f "$STEAMCMD_DIR/steamcmd.sh" ]; then
     curl -sqL "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz" \
       | tar zxf - -C "$STEAMCMD_DIR"
   fi
-  # Place the SteamGuard config where HOME-based steamcmd will find it.
+  # Place config.vdf where steamcmd ACTUALLY reads it. Modern steamcmd uses the
+  # XDG data dir $HOME/.local/share/Steam/config/ — NOT $HOME/Steam/config/. With
+  # the vdf at the wrong path steamcmd reports "Cached credentials not found" and
+  # falls back to mobile 2FA ("Two-factor code mismatch"); at the XDG path it
+  # reports "Logging in using cached credentials" and the vdf bypasses Steam Guard.
   if [ -f "$deploydir/steam/config/config.vdf" ]; then
-    cp "$deploydir/steam/config/config.vdf" "$STEAMCMD_HOME/Steam/config/config.vdf"
-    echo "config.vdf placed in $STEAMCMD_HOME/Steam/config/"
+    for d in "$STEAMCMD_HOME/.local/share/Steam" "$STEAMCMD_HOME/Steam" "$STEAMCMD_DIR/Steam"; do
+      mkdir -p "$d/config" "$d/logs"
+      cp "$deploydir/steam/config/config.vdf" "$d/config/config.vdf"
+      chmod 600 "$d/config/config.vdf"
+    done
+    echo "config.vdf placed at $STEAMCMD_HOME/.local/share/Steam/config/ (+ legacy paths)"
   else
     echo "No config.vdf (TOTP auth mode)"
   fi
@@ -175,7 +183,7 @@ run_steamcmd() {
   if [ $ret -ne 0 ]; then
     echo ""
     echo "=== Steam logs ==="
-    for f in "$STEAMCMD_HOME"/Steam/logs/* "$STEAMCMD_DIR"/logs/*; do
+    for f in "$STEAMCMD_HOME"/.local/share/Steam/logs/* "$STEAMCMD_HOME"/Steam/logs/* "$STEAMCMD_DIR"/logs/*; do
       [ -e "$f" ] && echo "######## $f" && cat "$f" && echo
     done
     echo "=================="
