@@ -17,8 +17,17 @@ mkdir -p "$deploydir/BuildOutput"
 mkdir -p "$deploydir/steam/config"
 manifest_path="$deploydir/manifest.vdf"
 
-# Clean up deploy workspace on exit (all files created by the runner user).
-cleanup() { rm -rf "$deploydir" 2>/dev/null || true; }
+# On exit: stash the steamcmd log to a PERSISTENT host path (outside the workspace
+# the trap wipes) so a failure is diagnosable even if the runner connection drops;
+# SHRED every config.vdf copy (no plaintext credential left behind); then remove the
+# workspace.
+persist_log="${DEPLOY_LOG_DIR:-/srv/builds/deploy-logs}/deploy-${GITHUB_RUN_ID:-local}-$$.log"
+cleanup() {
+  mkdir -p "$(dirname "$persist_log")" 2>/dev/null || true
+  [ -f "$deploydir/deploy_output.log" ] && cp "$deploydir/deploy_output.log" "$persist_log" 2>/dev/null || true
+  find "$deploydir" "${HOME:-/root}/Steam" "${HOME:-/root}/.local/share/Steam" /root/Steam /root/.local/share/Steam     -name config.vdf 2>/dev/null | while read -r f; do shred -u "$f" 2>/dev/null || rm -f "$f"; done
+  rm -rf "$deploydir" 2>/dev/null || true
+}
 trap cleanup EXIT
 
 echo ""
@@ -190,7 +199,7 @@ run_steamcmd() {
   # SIGTERM at STEAMCMD_TIMEOUT (default 20m for a real upload), SIGKILL 30s
   # later. An auth-failed steamcmd that ignores EOF then dies in minutes, not the
   # job ceiling — preventing a wedged runner.
-  local t="${STEAMCMD_TIMEOUT:-1200}"
+  local t="${STEAMCMD_TIMEOUT:-300}"
   timeout -k 30 "$t" "$STEAMCMD_DIR/steamcmd.sh" "$@" </dev/null
   ret=$?
   if [ $ret -ne 0 ]; then
