@@ -169,24 +169,24 @@ setup_steamcmd() {
     curl -sqL "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz" \
       | tar zxf - -C "$STEAMCMD_DIR"
   fi
-  # Place config.vdf where steamcmd ACTUALLY reads it: the invoking account's real
-  # $HOME/.local/share/Steam/config/. steamcmd IGNORES a HOME override and resolves
-  # the account home itself, so placing the vdf under a custom HOME ($deploydir/...)
-  # leaves it unread — steamcmd then reports "Logging in using username/password"
-  # and fails "Invalid Password". At the real XDG path it reports "Logging in using
-  # cached credentials" and the vdf authenticates with no password / no 2FA.
+  # Force steamcmd to the XDG data dir, the ONLY path where cached-token (vdf-only)
+  # login triggers. Empirically: when $HOME/Steam (legacy) exists, steamcmd uses it
+  # and reads config.vdf's "install" store but does NOT honor the cached login token
+  # ("BeginAuthSessionViaCredentials -> Invalid Password"). At $HOME/.local/share/
+  # Steam it reports "Logging in using cached credentials" and authenticates with the
+  # vdf alone. So: place the vdf ONLY at the XDG path, and symlink the legacy path to
+  # it so even a legacy-mode steamcmd lands in the XDG dir.
   if [ -f "$deploydir/steam/config/config.vdf" ]; then
-    # steamcmd's data dir varies by build/image: tarball steamcmd run as root uses
-    # $HOME/Steam (confirmed: logging dir /root/Steam/logs), while the steamcmd
-    # Docker image uses the XDG $HOME/.local/share/Steam. Place the vdf at ALL
-    # candidates under both the real $HOME and /root so the one steamcmd actually
-    # reads is always populated → "Logging in using cached credentials".
-    for d in "${HOME:-/root}/Steam" "${HOME:-/root}/.local/share/Steam" /root/Steam /root/.local/share/Steam; do
-      mkdir -p "$d/config" "$d/logs"
-      cp "$deploydir/steam/config/config.vdf" "$d/config/config.vdf"
-      chmod 600 "$d/config/config.vdf"
+    rm -rf "${HOME:-/root}/Steam" /root/Steam 2>/dev/null || true
+    for base in "$STEAM_DATA" /root/.local/share/Steam; do
+      mkdir -p "$base/config" "$base/logs"
+      cp "$deploydir/steam/config/config.vdf" "$base/config/config.vdf"
+      chmod 600 "$base/config/config.vdf"
     done
-    echo "config.vdf placed at: ${HOME:-/root}/Steam/config, .local/share/Steam/config, /root/... (all candidates)"
+    # legacy -> XDG symlinks so a legacy-mode steamcmd still uses the XDG dir
+    ln -sfn "$STEAM_DATA" "${HOME:-/root}/Steam" 2>/dev/null || true
+    [ "${HOME:-/root}" != "/root" ] && ln -sfn /root/.local/share/Steam /root/Steam 2>/dev/null || true
+    echo "config.vdf placed at $STEAM_DATA/config/ (XDG forced; legacy path symlinked)"
   else
     echo "No config.vdf (TOTP auth mode)"
   fi
