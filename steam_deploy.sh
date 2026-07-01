@@ -170,12 +170,15 @@ setup_steamcmd() {
       | tar zxf - -C "$STEAMCMD_DIR"
   fi
   # Force steamcmd to the XDG data dir, the ONLY path where cached-token (vdf-only)
-  # login triggers. Empirically: when $HOME/Steam (legacy) exists, steamcmd uses it
-  # and reads config.vdf's "install" store but does NOT honor the cached login token
-  # ("BeginAuthSessionViaCredentials -> Invalid Password"). At $HOME/.local/share/
-  # Steam it reports "Logging in using cached credentials" and authenticates with the
-  # vdf alone. So: place the vdf ONLY at the XDG path, and symlink the legacy path to
-  # it so even a legacy-mode steamcmd lands in the XDG dir.
+  # login triggers. Empirically: when $HOME/Steam (legacy) EXISTS — even as a
+  # symlink to the XDG dir — steamcmd runs in legacy mode, reads config.vdf's
+  # "install" store but does NOT honor the cached login token, and falls back to
+  # credential auth ("BeginAuthSessionViaCredentials -> Invalid Password" /
+  # "Two-factor code mismatch"). At $HOME/.local/share/Steam, with NO legacy dir
+  # present, it reports "Logging in using cached credentials" and authenticates
+  # from the vdf alone (verified against a docker steamcmd run). So: place the vdf
+  # ONLY at the XDG path and make sure the legacy path does not exist — do NOT
+  # symlink it (a prior version did, which reintroduced legacy mode and broke this).
   if [ -f "$deploydir/steam/config/config.vdf" ]; then
     rm -rf "${HOME:-/root}/Steam" /root/Steam 2>/dev/null || true
     for base in "$STEAM_DATA" /root/.local/share/Steam; do
@@ -183,10 +186,7 @@ setup_steamcmd() {
       cp "$deploydir/steam/config/config.vdf" "$base/config/config.vdf"
       chmod 600 "$base/config/config.vdf"
     done
-    # legacy -> XDG symlinks so a legacy-mode steamcmd still uses the XDG dir
-    ln -sfn "$STEAM_DATA" "${HOME:-/root}/Steam" 2>/dev/null || true
-    [ "${HOME:-/root}" != "/root" ] && ln -sfn /root/.local/share/Steam /root/Steam 2>/dev/null || true
-    echo "config.vdf placed at $STEAM_DATA/config/ (XDG forced; legacy path symlinked)"
+    echo "config.vdf placed at $STEAM_DATA/config/ (XDG only; no legacy symlink)"
   else
     echo "No config.vdf (TOTP auth mode)"
   fi
