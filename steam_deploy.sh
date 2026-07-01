@@ -186,7 +186,16 @@ setup_steamcmd() {
       cp "$deploydir/steam/config/config.vdf" "$base/config/config.vdf"
       chmod 600 "$base/config/config.vdf"
     done
-    echo "config.vdf placed at $STEAM_DATA/config/ (XDG only; no legacy symlink)"
+    # Point steamcmd's canonical data-dir links (~/.steam/steam, ~/.steam/root) at
+    # the XDG dir. This is exactly what the docker `steamcmd/steamcmd` image does,
+    # and it's THE thing that makes steamcmd honor the cached vdf token ("Logging in
+    # using cached credentials") instead of defaulting ~/.steam/steam -> ~/Steam
+    # (legacy) where it ignores the token and falls back to credential auth
+    # (Invalid Password / Two-factor code mismatch).
+    mkdir -p "${HOME:-/root}/.steam"
+    ln -sfn "$STEAM_DATA" "${HOME:-/root}/.steam/steam"
+    ln -sfn "$STEAM_DATA" "${HOME:-/root}/.steam/root"
+    echo "config.vdf placed at $STEAM_DATA/config/ (XDG; ~/.steam -> XDG)"
   else
     echo "No config.vdf (TOTP auth mode)"
   fi
